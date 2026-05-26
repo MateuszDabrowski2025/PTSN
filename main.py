@@ -4,31 +4,34 @@ import sqlite3
 import pyttsx3
 import mediapipe as mp
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
-                             QPushButton, QLabel, QLineEdit, QStackedWidget, QHBoxLayout, QMessageBox)
+                             QPushButton, QLabel, QLineEdit, QStackedWidget, QMessageBox)
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
 from PyQt6.QtGui import QImage, QPixmap
+
+DB_NAME = 'telemedycyna.db'
 
 
 # ==========================================
 # 1. BAZA DANYCH (SQLite)
 # ==========================================
 def init_db():
-    conn = sqlite3.connect('telemedycyna.db')
-    cursor = conn.cursor()
-    # Tabela użytkowników
-    cursor.execute('''CREATE TABLE IF NOT EXISTS users
-                      (id INTEGER PRIMARY KEY, username TEXT, password TEXT, role TEXT)''')
-    # Tabela wyników testów
-    cursor.execute('''CREATE TABLE IF NOT EXISTS tests 
-                      (id INTEGER PRIMARY KEY, patient_username TEXT, result_data TEXT, doctor_decision TEXT)''')
+    # Używamy menedżera kontekstu (with), co automatycznie wykonuje commit() i zamyka połączenie
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        # Tabela użytkowników
+        cursor.execute('''CREATE TABLE IF NOT EXISTS users
+                          (id INTEGER PRIMARY KEY, username TEXT, password TEXT, role TEXT )''')
+        # Tabela wyników testów
+        cursor.execute('''CREATE TABLE IF NOT EXISTS tests
+                          ( id INTEGER PRIMARY KEY, patient_username TEXT, result_data TEXT, doctor_decision TEXT )''')
 
-    # Dodanie testowych użytkowników (jeśli nie istnieją)
-    cursor.execute("SELECT COUNT(*) FROM users")
-    if cursor.fetchone()[0] == 0:
-        cursor.execute("INSERT INTO users (username, password, role) VALUES ('pacjent1', '123', 'pacjent')")
-        cursor.execute("INSERT INTO users (username, password, role) VALUES ('lekarz1', '123', 'lekarz')")
-        conn.commit()
-    conn.close()
+        # Dodanie testowych użytkowników (jeśli nie istnieją)
+        cursor.execute("SELECT COUNT(*) FROM users")
+        if cursor.fetchone()[0] == 0:
+            cursor.execute("INSERT INTO users (username, password, role) VALUES (?, ?, ?)",
+                           ('pacjent1', '123', 'pacjent'))
+            cursor.execute("INSERT INTO users (username, password, role) VALUES (?, ?, ?)",
+                           ('lekarz1', '123', 'lekarz'))
 
 
 # ==========================================
@@ -44,14 +47,17 @@ class VoiceAssistantThread(QThread):
 
     def run(self):
         engine = pyttsx3.init()
-        # Ustawienie polskiego głosu (jeśli dostępny w systemie)
         voices = engine.getProperty('voices')
         for voice in voices:
             if 'polish' in voice.name.lower() or 'pl' in voice.languages:
                 engine.setProperty('voice', voice.id)
                 break
-        engine.say(self.text)
-        engine.runAndWait()
+
+        try:
+            engine.say(self.text)
+            engine.runAndWait()
+        except RuntimeError:
+            pass  # Zapobiega crashom, jeśli pętla silnika TTS jest już aktywna
 
 
 class CameraMediaPipeThread(QThread):
@@ -65,6 +71,10 @@ class CameraMediaPipeThread(QThread):
 
     def run(self):
         cap = cv2.VideoCapture(self.camera_id)
+        if not cap.isOpened():
+            print("Błąd: Nie można otworzyć kamery.")
+            return
+
         mp_pose = mp.solutions.pose
         mp_drawing = mp.solutions.drawing_utils
 
@@ -136,31 +146,25 @@ class AppWindow(QMainWindow):
         self.stacked_widget.addWidget(widget)
 
     def init_patient_screen(self):
-        # ... (existing code)
-        self.start_test_btn = QPushButton("Rozpocznij Test Neurologiczny")  # Make it a class attribute
-        self.start_test_btn.clicked.connect(self.start_patient_test)
-        # ...
-
         self.patient_widget = QWidget()
         layout = QVBoxLayout()
 
         self.info_label = QLabel("Panel Pacjenta - Oczekiwanie na test...")
 
-        # Miejsce na strumienie wideo (tu w MVP jest 1 kamera, docelowo można dodać obok drugą)
         self.video_label = QLabel("Kamera wyłączona")
         self.video_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.video_label.setStyleSheet("background-color: black; color: white;")
         self.video_label.setMinimumSize(640, 480)
 
-        start_test_btn = QPushButton("Rozpocznij Test Neurologiczny")
-        start_test_btn.clicked.connect(self.start_patient_test)
+        self.start_test_btn = QPushButton("Rozpocznij Test Neurologiczny")
+        self.start_test_btn.clicked.connect(self.start_patient_test)
 
         logout_btn = QPushButton("Wyloguj")
         logout_btn.clicked.connect(self.logout)
 
         layout.addWidget(self.info_label)
         layout.addWidget(self.video_label)
-        layout.addWidget(start_test_btn)
+        layout.addWidget(self.start_test_btn)
         layout.addWidget(logout_btn)
         self.patient_widget.setLayout(layout)
         self.stacked_widget.addWidget(self.patient_widget)
@@ -192,11 +196,10 @@ class AppWindow(QMainWindow):
         username = self.user_input.text()
         password = self.pass_input.text()
 
-        conn = sqlite3.connect('telemedycyna.db')
-        cursor = conn.cursor()
-        cursor.execute("SELECT role FROM users WHERE username=? AND password=?", (username, password))
-        result = cursor.fetchone()
-        conn.close()
+        with sqlite3.connect(DB_NAME) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT role FROM users WHERE username=? AND password=?", (username, password))
+            result = cursor.fetchone()
 
         if result:
             role = result[0]
@@ -210,8 +213,7 @@ class AppWindow(QMainWindow):
             QMessageBox.warning(self, "Błąd", "Nieprawidłowe dane logowania!")
 
     def start_patient_test(self):
-        self.start_test_btn.setEnabled(False)  # Disable the button to prevent spamming
-        # ... (rest of the code)
+        self.start_test_btn.setEnabled(False)  # Zablokowanie przycisku przed spamowaniem
 
         self.info_label.setText("Test w toku... Postępuj zgodnie z instrukcjami głosowymi.")
 
@@ -225,17 +227,13 @@ class AppWindow(QMainWindow):
         self.camera_thread.change_pixmap_signal.connect(self.update_image)
         self.camera_thread.start()
 
-        # --- NOWY KOD: Zapis do bazy danych ---
-        # W docelowej wersji te dane pochodziłyby z analizy punktów (landmarks) z MediaPipe.
-        # Na razie symulujemy zapisanie wyniku.
-        conn = sqlite3.connect('telemedycyna.db')
-        cursor = conn.cursor()
-        cursor.execute('''INSERT INTO tests (patient_username, result_data, doctor_decision) 
-                          VALUES (?, ?, ?)''',
-                       (self.current_user, "Ruch zarejestrowany: Prawa ręka uniesiona (Dane z MediaPipe)",
-                        "Oczekuje na decyzję"))
-        conn.commit()
-        conn.close()
+        # Zapis do bazy danych
+        with sqlite3.connect(DB_NAME) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''INSERT INTO tests (patient_username, result_data, doctor_decision)
+                              VALUES (?, ?, ?)''',
+                           (self.current_user, "Ruch zarejestrowany: Prawa ręka uniesiona (Dane z MediaPipe)",
+                            "Oczekuje na decyzję"))
 
     def update_image(self, q_img):
         # Aktualizacja obrazu w interfejsie pacjenta
@@ -243,11 +241,10 @@ class AppWindow(QMainWindow):
             self.video_label.width(), self.video_label.height(), Qt.AspectRatioMode.KeepAspectRatio))
 
     def load_doctor_results(self):
-        conn = sqlite3.connect('telemedycyna.db')
-        cursor = conn.cursor()
-        cursor.execute("SELECT id, patient_username, result_data FROM tests")
-        rows = cursor.fetchall()
-        conn.close()
+        with sqlite3.connect(DB_NAME) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, patient_username, result_data FROM tests")
+            rows = cursor.fetchall()
 
         if rows:
             txt = "\n".join([f"ID: {r[0]} | Pacjent: {r[1]} | Wynik AI: {r[2]}" for r in rows])
@@ -255,22 +252,26 @@ class AppWindow(QMainWindow):
         else:
             self.results_label.setText("Brak danych w bazie.")
 
-
     def logout(self):
-        if hasattr(self, 'camera_thread'):
+        if hasattr(self, 'camera_thread') and self.camera_thread.isRunning():
             self.camera_thread.stop()
 
-        # Reset the patient UI
+        # Reset interfejsu pacjenta
         if hasattr(self, 'start_test_btn'):
             self.start_test_btn.setEnabled(True)
             self.info_label.setText("Panel Pacjenta - Oczekiwanie na test...")
-            self.video_label.setPixmap(QPixmap())  # Clear the image
+            self.video_label.clear()
             self.video_label.setText("Kamera wyłączona")
 
         self.current_user = None
         self.user_input.clear()
         self.pass_input.clear()
         self.stacked_widget.setCurrentIndex(0)
+
+    def closeEvent(self, event):
+        if hasattr(self, 'camera_thread') and self.camera_thread.isRunning():
+            self.camera_thread.stop()
+        event.accept()
 
 
 if __name__ == '__main__':
