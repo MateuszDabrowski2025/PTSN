@@ -1,31 +1,29 @@
 import sys
 import cv2
 import sqlite3
-import pyttsx3
+import numpy as np
 import mediapipe as mp
+import pyttsx3
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QPushButton, QLabel, QLineEdit, QStackedWidget, QMessageBox)
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
 from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtTextToSpeech import QTextToSpeech
+from PyQt6.QtCore import QLocale
 
 DB_NAME = 'telemedycyna.db'
-
 
 # ==========================================
 # 1. BAZA DANYCH (SQLite)
 # ==========================================
 def init_db():
-    # Używamy menedżera kontekstu (with), co automatycznie wykonuje commit() i zamyka połączenie
     with sqlite3.connect(DB_NAME) as conn:
         cursor = conn.cursor()
-        # Tabela użytkowników
         cursor.execute('''CREATE TABLE IF NOT EXISTS users
                           (id INTEGER PRIMARY KEY, username TEXT, password TEXT, role TEXT )''')
-        # Tabela wyników testów
         cursor.execute('''CREATE TABLE IF NOT EXISTS tests
                           ( id INTEGER PRIMARY KEY, patient_username TEXT, result_data TEXT, doctor_decision TEXT )''')
 
-        # Dodanie testowych użytkowników (jeśli nie istnieją)
         cursor.execute("SELECT COUNT(*) FROM users")
         if cursor.fetchone()[0] == 0:
             cursor.execute("INSERT INTO users (username, password, role) VALUES (?, ?, ?)",
@@ -37,10 +35,7 @@ def init_db():
 # ==========================================
 # 2. WĄTKI POBOCZNE (Audio i Wideo)
 # ==========================================
-
 class VoiceAssistantThread(QThread):
-    """Wątek do syntezy mowy, aby nie blokować GUI PyQt"""
-
     def __init__(self, text):
         super().__init__()
         self.text = text
@@ -52,17 +47,16 @@ class VoiceAssistantThread(QThread):
             if 'polish' in voice.name.lower() or 'pl' in voice.languages:
                 engine.setProperty('voice', voice.id)
                 break
-
         try:
             engine.say(self.text)
             engine.runAndWait()
         except RuntimeError:
-            pass  # Zapobiega crashom, jeśli pętla silnika TTS jest już aktywna
-
+            pass
 
 class CameraMediaPipeThread(QThread):
-    """Wątek przechwytujący obraz z kamery i nakładający MediaPipe"""
     change_pixmap_signal = pyqtSignal(QImage)
+    # Now we can send the test result back to the main GUI!
+    test_result_signal = pyqtSignal(str)
 
     def __init__(self, camera_id=0):
         super().__init__()
@@ -72,30 +66,43 @@ class CameraMediaPipeThread(QThread):
     def run(self):
         cap = cv2.VideoCapture(self.camera_id)
         if not cap.isOpened():
-            print("Błąd: Nie można otworzyć kamery.")
+            print(f"Błąd: Nie można otworzyć kamery o ID {self.camera_id}.")
             return
-
         mp_pose = mp.solutions.pose
         mp_drawing = mp.solutions.drawing_utils
-
+        # mp_pose and mp_drawing are now safely pulled from the global scope
         with mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5) as pose:
             while self._run_flag:
                 ret, frame = cap.read()
                 if ret:
-                    # Przetwarzanie obrazu na RGB dla MediaPipe
                     image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    image_rgb.flags.writeable = False
                     results = pose.process(image_rgb)
+                    image_rgb.flags.writeable = True
 
-                    # Rysowanie szkieletu na obrazie
                     if results.pose_landmarks:
                         mp_drawing.draw_landmarks(
                             image_rgb, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
 
-                    # Konwersja z powrotem do formatu zgodnego z PyQt
+                        # --- DIAGNOSTIC LOGIC ---
+                        # In MediaPipe, Y=0 is the top of the screen and Y=1 is the bottom.
+                        # We extract the Right Shoulder (12) and Right Wrist (16)
+                        right_shoulder = results.pose_landmarks.landmark[mp_pose.PoseLandmark.RIGHT_SHOULDER]
+                        right_wrist = results.pose_landmarks.landmark[mp_pose.PoseLandmark.RIGHT_WRIST]
+
+                        # If the wrist's Y coordinate is smaller than the shoulder's Y, the arm is raised
+                        if right_wrist.y < right_shoulder.y:
+                            self.test_result_signal.emit("Sukces: Prawa ręka została uniesiona.")
+
+                    image_rgb = np.ascontiguousarray(image_rgb)
                     h, w, ch = image_rgb.shape
                     bytes_per_line = ch * w
-                    q_img = QImage(image_rgb.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+
+                    q_img = QImage(image_rgb.data, w, h, bytes_per_line, QImage.Format.Format_RGB888).copy()
                     self.change_pixmap_signal.emit(q_img)
+
+                QThread.msleep(30)
+
         cap.release()
 
     def stop(self):
@@ -106,24 +113,23 @@ class CameraMediaPipeThread(QThread):
 # ==========================================
 # 3. GŁÓWNE OKNA APLIKACJI (GUI)
 # ==========================================
-
 class AppWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.tts = QTextToSpeech()
+        self.tts.setLocale(QLocale(QLocale.Language.Polish))
         self.setWindowTitle("System Diagnostyki Neurologicznej")
         self.setGeometry(100, 100, 800, 600)
         self.current_user = None
 
-        # Główny menedżer widoków (pozwala przełączać ekrany)
         self.stacked_widget = QStackedWidget()
         self.setCentralWidget(self.stacked_widget)
 
-        # Inicjalizacja ekranów
         self.init_login_screen()
         self.init_patient_screen()
         self.init_doctor_screen()
 
-        self.stacked_widget.setCurrentIndex(0)  # Start od logowania
+        self.stacked_widget.setCurrentIndex(0)
 
     def init_login_screen(self):
         widget = QWidget()
@@ -190,8 +196,6 @@ class AppWindow(QMainWindow):
         self.doctor_widget.setLayout(layout)
         self.stacked_widget.addWidget(self.doctor_widget)
 
-    # --- Logika aplikacji ---
-
     def handle_login(self):
         username = self.user_input.text()
         password = self.pass_input.text()
@@ -213,30 +217,22 @@ class AppWindow(QMainWindow):
             QMessageBox.warning(self, "Błąd", "Nieprawidłowe dane logowania!")
 
     def start_patient_test(self):
-        self.start_test_btn.setEnabled(False)  # Zablokowanie przycisku przed spamowaniem
+        self.start_test_btn.setEnabled(False)
+        self.info_label.setText("Test w toku... Proszę podnieść prawą rękę do góry.")
+        self.tts.say("Rozpoczynamy badanie układu nerwowego. Proszę podnieść prawą rękę do góry.")
 
-        self.info_label.setText("Test w toku... Postępuj zgodnie z instrukcjami głosowymi.")
-
-        # Uruchomienie asystenta głosowego
-        self.voice_thread = VoiceAssistantThread(
-            "Rozpoczynamy badanie układu nerwowego. Proszę podnieść prawą rękę do góry.")
-        self.voice_thread.start()
-
-        # Uruchomienie śledzenia z kamery
-        self.camera_thread = CameraMediaPipeThread(camera_id=0)
+        self.camera_thread = CameraMediaPipeThread()
         self.camera_thread.change_pixmap_signal.connect(self.update_image)
+        # Connect the physical detection logic!
+        self.camera_thread.test_result_signal.connect(self.handle_test_success)
         self.camera_thread.start()
 
-        # Zapis do bazy danych
-        with sqlite3.connect(DB_NAME) as conn:
-            cursor = conn.cursor()
-            cursor.execute('''INSERT INTO tests (patient_username, result_data, doctor_decision)
-                              VALUES (?, ?, ?)''',
-                           (self.current_user, "Ruch zarejestrowany: Prawa ręka uniesiona (Dane z MediaPipe)",
-                            "Oczekuje na decyzję"))
+    def handle_test_success(self, message):
+        # Update the screen
+        self.info_label.setText(message)
+        self.info_label.setStyleSheet("color: green; font-weight: bold;")
 
     def update_image(self, q_img):
-        # Aktualizacja obrazu w interfejsie pacjenta
         self.video_label.setPixmap(QPixmap.fromImage(q_img).scaled(
             self.video_label.width(), self.video_label.height(), Qt.AspectRatioMode.KeepAspectRatio))
 
@@ -256,7 +252,6 @@ class AppWindow(QMainWindow):
         if hasattr(self, 'camera_thread') and self.camera_thread.isRunning():
             self.camera_thread.stop()
 
-        # Reset interfejsu pacjenta
         if hasattr(self, 'start_test_btn'):
             self.start_test_btn.setEnabled(True)
             self.info_label.setText("Panel Pacjenta - Oczekiwanie na test...")
@@ -275,10 +270,7 @@ class AppWindow(QMainWindow):
 
 
 if __name__ == '__main__':
-    # Przygotowanie bazy danych na start
     init_db()
-
-    # Uruchomienie aplikacji GUI
     app = QApplication(sys.argv)
     window = AppWindow()
     window.show()
