@@ -4,14 +4,16 @@ import sqlite3
 import numpy as np
 import mediapipe as mp
 import pyttsx3
+import math
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
-                             QPushButton, QLabel, QLineEdit, QStackedWidget, QMessageBox)
+                             QPushButton, QLabel, QLineEdit, QStackedWidget, QMessageBox, QComboBox)
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtTextToSpeech import QTextToSpeech
 from PyQt6.QtCore import QLocale
 
 DB_NAME = 'telemedycyna.db'
+
 
 # ==========================================
 # 1. BAZA DANYCH (SQLite)
@@ -20,9 +22,31 @@ def init_db():
     with sqlite3.connect(DB_NAME) as conn:
         cursor = conn.cursor()
         cursor.execute('''CREATE TABLE IF NOT EXISTS users
-                          (id INTEGER PRIMARY KEY, username TEXT, password TEXT, role TEXT )''')
+                          (
+                              id
+                              INTEGER
+                              PRIMARY
+                              KEY,
+                              username
+                              TEXT,
+                              password
+                              TEXT,
+                              role
+                              TEXT
+                          )''')
         cursor.execute('''CREATE TABLE IF NOT EXISTS tests
-                          ( id INTEGER PRIMARY KEY, patient_username TEXT, result_data TEXT, doctor_decision TEXT )''')
+                          (
+                              id
+                              INTEGER
+                              PRIMARY
+                              KEY,
+                              patient_username
+                              TEXT,
+                              result_data
+                              TEXT,
+                              doctor_decision
+                              TEXT
+                          )''')
 
         cursor.execute("SELECT COUNT(*) FROM users")
         if cursor.fetchone()[0] == 0:
@@ -35,42 +59,26 @@ def init_db():
 # ==========================================
 # 2. WĄTKI POBOCZNE (Audio i Wideo)
 # ==========================================
-class VoiceAssistantThread(QThread):
-    def __init__(self, text):
-        super().__init__()
-        self.text = text
-
-    def run(self):
-        engine = pyttsx3.init()
-        voices = engine.getProperty('voices')
-        for voice in voices:
-            if 'polish' in voice.name.lower() or 'pl' in voice.languages:
-                engine.setProperty('voice', voice.id)
-                break
-        try:
-            engine.say(self.text)
-            engine.runAndWait()
-        except RuntimeError:
-            pass
-
 class CameraMediaPipeThread(QThread):
     change_pixmap_signal = pyqtSignal(QImage)
-    # Now we can send the test result back to the main GUI!
     test_result_signal = pyqtSignal(str)
 
-    def __init__(self, camera_id=0):
+    def __init__(self, camera_id=0, test_type='right_arm'):
         super().__init__()
         self.camera_id = camera_id
+        self.test_type = test_type
         self._run_flag = True
+        self.test_passed = False
 
     def run(self):
         cap = cv2.VideoCapture(self.camera_id)
         if not cap.isOpened():
             print(f"Błąd: Nie można otworzyć kamery o ID {self.camera_id}.")
             return
+
         mp_pose = mp.solutions.pose
         mp_drawing = mp.solutions.drawing_utils
-        # mp_pose and mp_drawing are now safely pulled from the global scope
+
         with mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5) as pose:
             while self._run_flag:
                 ret, frame = cap.read()
@@ -85,14 +93,41 @@ class CameraMediaPipeThread(QThread):
                             image_rgb, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
 
                         # --- DIAGNOSTIC LOGIC ---
-                        # In MediaPipe, Y=0 is the top of the screen and Y=1 is the bottom.
-                        # We extract the Right Shoulder (12) and Right Wrist (16)
-                        right_shoulder = results.pose_landmarks.landmark[mp_pose.PoseLandmark.RIGHT_SHOULDER]
-                        right_wrist = results.pose_landmarks.landmark[mp_pose.PoseLandmark.RIGHT_WRIST]
+                        if not self.test_passed:
+                            landmarks = results.pose_landmarks.landmark
 
-                        # If the wrist's Y coordinate is smaller than the shoulder's Y, the arm is raised
-                        if right_wrist.y < right_shoulder.y:
-                            self.test_result_signal.emit("Sukces: Prawa ręka została uniesiona.")
+                            r_shoulder = landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER]
+                            r_wrist = landmarks[mp_pose.PoseLandmark.RIGHT_WRIST]
+                            l_shoulder = landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER]
+                            l_wrist = landmarks[mp_pose.PoseLandmark.LEFT_WRIST]
+
+                            # Check if key landmarks are visible enough
+                            r_visible = r_shoulder.visibility > 0.5 and r_wrist.visibility > 0.5
+                            l_visible = l_shoulder.visibility > 0.5 and l_wrist.visibility > 0.5
+
+                            passed = False
+
+                            if self.test_type == 'right_arm' and r_visible:
+                                if r_wrist.y < r_shoulder.y:
+                                    passed = True
+
+                            elif self.test_type == 'left_arm' and l_visible:
+                                if l_wrist.y < l_shoulder.y:
+                                    passed = True
+
+                            elif self.test_type == 'both_arms' and r_visible and l_visible:
+                                if r_wrist.y < r_shoulder.y and l_wrist.y < l_shoulder.y:
+                                    passed = True
+
+                            elif self.test_type == 'hands_together' and r_visible and l_visible:
+                                # Calculate distance between wrists
+                                dist = math.hypot(r_wrist.x - l_wrist.x, r_wrist.y - l_wrist.y)
+                                if dist < 0.05:  # Wrists are very close to each other
+                                    passed = True
+
+                            if passed:
+                                self.test_passed = True
+                                self.test_result_signal.emit("Sukces: Zadanie wykonane poprawnie.")
 
                     image_rgb = np.ascontiguousarray(image_rgb)
                     h, w, ch = image_rgb.shape
@@ -119,7 +154,7 @@ class AppWindow(QMainWindow):
         self.tts = QTextToSpeech()
         self.tts.setLocale(QLocale(QLocale.Language.Polish))
         self.setWindowTitle("System Diagnostyki Neurologicznej")
-        self.setGeometry(100, 100, 800, 600)
+        self.setGeometry(100, 100, 800, 700)
         self.current_user = None
 
         self.stacked_widget = QStackedWidget()
@@ -162,6 +197,15 @@ class AppWindow(QMainWindow):
         self.video_label.setStyleSheet("background-color: black; color: white;")
         self.video_label.setMinimumSize(640, 480)
 
+        # Dropdown for selecting the neurological test
+        self.test_selector = QComboBox()
+        self.test_selector.addItems([
+            "Uniesienie prawej ręki",
+            "Uniesienie lewej ręki",
+            "Uniesienie obu rąk",
+            "Złączenie dłoni przed sobą (Palec-do-palca)"
+        ])
+
         self.start_test_btn = QPushButton("Rozpocznij Test Neurologiczny")
         self.start_test_btn.clicked.connect(self.start_patient_test)
 
@@ -170,6 +214,8 @@ class AppWindow(QMainWindow):
 
         layout.addWidget(self.info_label)
         layout.addWidget(self.video_label)
+        layout.addWidget(QLabel("Wybierz rodzaj testu do przeprowadzenia:"))
+        layout.addWidget(self.test_selector)
         layout.addWidget(self.start_test_btn)
         layout.addWidget(logout_btn)
         self.patient_widget.setLayout(layout)
@@ -183,6 +229,7 @@ class AppWindow(QMainWindow):
         layout.addWidget(QLabel("Ostatnie wyniki testów do przeanalizowania (Z bazy danych):"))
 
         self.results_label = QLabel("Brak nowych testów.")
+        self.results_label.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         refresh_btn = QPushButton("Odśwież wyniki")
         refresh_btn.clicked.connect(self.load_doctor_results)
@@ -218,19 +265,43 @@ class AppWindow(QMainWindow):
 
     def start_patient_test(self):
         self.start_test_btn.setEnabled(False)
-        self.info_label.setText("Test w toku... Proszę podnieść prawą rękę do góry.")
-        self.tts.say("Rozpoczynamy badanie układu nerwowego. Proszę podnieść prawą rękę do góry.")
+        self.test_selector.setEnabled(False)
 
-        self.camera_thread = CameraMediaPipeThread()
+        test_index = self.test_selector.currentIndex()
+        if test_index == 0:
+            test_type = 'right_arm'
+            instruction = "Proszę podnieść prawą rękę do góry."
+        elif test_index == 1:
+            test_type = 'left_arm'
+            instruction = "Proszę podnieść lewą rękę do góry."
+        elif test_index == 2:
+            test_type = 'both_arms'
+            instruction = "Proszę podnieść obie ręce do góry."
+        elif test_index == 3:
+            test_type = 'hands_together'
+            instruction = "Proszę wyciągnąć ręce i złączyć dłonie przed sobą."
+
+        self.info_label.setText(f"Test w toku... {instruction}")
+        self.info_label.setStyleSheet("color: black; font-weight: normal;")
+
+        self.tts.say(f"Rozpoczynamy badanie. {instruction}")
+
+        self.camera_thread = CameraMediaPipeThread(test_type=test_type)
         self.camera_thread.change_pixmap_signal.connect(self.update_image)
-        # Connect the physical detection logic!
         self.camera_thread.test_result_signal.connect(self.handle_test_success)
         self.camera_thread.start()
 
     def handle_test_success(self, message):
-        # Update the screen
         self.info_label.setText(message)
         self.info_label.setStyleSheet("color: green; font-weight: bold;")
+        self.tts.say("Zadanie wykonane poprawnie. Dziękuję.")
+
+        # Save the completed test to the database
+        test_name = self.test_selector.currentText()
+        with sqlite3.connect(DB_NAME) as conn:
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO tests (patient_username, result_data, doctor_decision) VALUES (?, ?, ?)",
+                           (self.current_user, f"Zaliczony: {test_name}", "Do weryfikacji"))
 
     def update_image(self, q_img):
         self.video_label.setPixmap(QPixmap.fromImage(q_img).scaled(
@@ -239,11 +310,11 @@ class AppWindow(QMainWindow):
     def load_doctor_results(self):
         with sqlite3.connect(DB_NAME) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT id, patient_username, result_data FROM tests")
+            cursor.execute("SELECT id, patient_username, result_data, doctor_decision FROM tests")
             rows = cursor.fetchall()
 
         if rows:
-            txt = "\n".join([f"ID: {r[0]} | Pacjent: {r[1]} | Wynik AI: {r[2]}" for r in rows])
+            txt = "\n\n".join([f"ID: {r[0]} | Pacjent: {r[1]}\nWynik AI: {r[2]} | Status: {r[3]}" for r in rows])
             self.results_label.setText(txt)
         else:
             self.results_label.setText("Brak danych w bazie.")
@@ -254,7 +325,9 @@ class AppWindow(QMainWindow):
 
         if hasattr(self, 'start_test_btn'):
             self.start_test_btn.setEnabled(True)
+            self.test_selector.setEnabled(True)
             self.info_label.setText("Panel Pacjenta - Oczekiwanie na test...")
+            self.info_label.setStyleSheet("color: black; font-weight: normal;")
             self.video_label.clear()
             self.video_label.setText("Kamera wyłączona")
 
