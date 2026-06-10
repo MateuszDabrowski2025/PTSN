@@ -6,13 +6,95 @@ import mediapipe as mp
 import pyttsx3
 import math
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
-                             QPushButton, QLabel, QLineEdit, QStackedWidget, QMessageBox, QComboBox)
+                             QHBoxLayout, QPushButton, QLabel, QLineEdit,
+                             QStackedWidget, QMessageBox, QComboBox, QTableWidget,
+                             QTableWidgetItem, QHeaderView, QFrame, QSizePolicy)
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtTextToSpeech import QTextToSpeech
 from PyQt6.QtCore import QLocale
 
 DB_NAME = 'telemedycyna.db'
+
+# ==========================================
+STYLE_SHEET = """
+QMainWindow {
+    background-color: #f0f4f8;
+}
+QLabel {
+    font-size: 14px;
+    color: #333333;
+}
+QLabel#header {
+    font-size: 26px;
+    font-weight: bold;
+    color: #2c3e50;
+    margin-bottom: 20px;
+}
+QLabel#video_feed {
+    background-color: #1e1e1e;
+    color: #ffffff;
+    border-radius: 10px;
+}
+QLineEdit {
+    padding: 12px;
+    font-size: 14px;
+    border: 1px solid #ced4da;
+    border-radius: 6px;
+    background-color: #ffffff;
+}
+QLineEdit:focus {
+    border: 2px solid #3498db;
+}
+QPushButton {
+    background-color: #3498db;
+    color: white;
+    padding: 12px 20px;
+    font-size: 14px;
+    border: none;
+    border-radius: 6px;
+    font-weight: bold;
+}
+QPushButton:hover {
+    background-color: #2980b9;
+}
+QPushButton:disabled {
+    background-color: #95a5a6;
+    color: #ecf0f1;
+}
+QPushButton#danger {
+    background-color: #e74c3c;
+}
+QPushButton#danger:hover {
+    background-color: #c0392b;
+}
+QComboBox {
+    padding: 10px;
+    font-size: 14px;
+    border: 1px solid #ced4da;
+    border-radius: 6px;
+    background-color: #ffffff;
+}
+QTableWidget {
+    background-color: #ffffff;
+    alternate-background-color: #f9f9f9;
+    border: 1px solid #ced4da;
+    border-radius: 6px;
+    font-size: 14px;
+}
+QHeaderView::section {
+    background-color: #ecf0f1;
+    padding: 8px;
+    font-weight: bold;
+    border: none;
+    border-bottom: 2px solid #bdc3c7;
+}
+QFrame#login_box {
+    background-color: #ffffff;
+    border-radius: 10px;
+    border: 1px solid #e1e8ed;
+}
+"""
 
 
 # ==========================================
@@ -101,29 +183,19 @@ class CameraMediaPipeThread(QThread):
                             l_shoulder = landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER]
                             l_wrist = landmarks[mp_pose.PoseLandmark.LEFT_WRIST]
 
-                            # Check if key landmarks are visible enough
                             r_visible = r_shoulder.visibility > 0.5 and r_wrist.visibility > 0.5
                             l_visible = l_shoulder.visibility > 0.5 and l_wrist.visibility > 0.5
-
                             passed = False
 
                             if self.test_type == 'right_arm' and r_visible:
-                                if r_wrist.y < r_shoulder.y:
-                                    passed = True
-
+                                if r_wrist.y < r_shoulder.y: passed = True
                             elif self.test_type == 'left_arm' and l_visible:
-                                if l_wrist.y < l_shoulder.y:
-                                    passed = True
-
+                                if l_wrist.y < l_shoulder.y: passed = True
                             elif self.test_type == 'both_arms' and r_visible and l_visible:
-                                if r_wrist.y < r_shoulder.y and l_wrist.y < l_shoulder.y:
-                                    passed = True
-
+                                if r_wrist.y < r_shoulder.y and l_wrist.y < l_shoulder.y: passed = True
                             elif self.test_type == 'hands_together' and r_visible and l_visible:
-                                # Calculate distance between wrists
                                 dist = math.hypot(r_wrist.x - l_wrist.x, r_wrist.y - l_wrist.y)
-                                if dist < 0.05:  # Wrists are very close to each other
-                                    passed = True
+                                if dist < 0.05: passed = True
 
                             if passed:
                                 self.test_passed = True
@@ -137,7 +209,6 @@ class CameraMediaPipeThread(QThread):
                     self.change_pixmap_signal.emit(q_img)
 
                 QThread.msleep(30)
-
         cap.release()
 
     def stop(self):
@@ -154,7 +225,9 @@ class AppWindow(QMainWindow):
         self.tts = QTextToSpeech()
         self.tts.setLocale(QLocale(QLocale.Language.Polish))
         self.setWindowTitle("System Diagnostyki Neurologicznej")
-        self.setGeometry(100, 100, 800, 700)
+        self.setMinimumSize(900, 700)
+        self.setStyleSheet(STYLE_SHEET)
+
         self.current_user = None
 
         self.stacked_widget = QStackedWidget()
@@ -168,10 +241,23 @@ class AppWindow(QMainWindow):
 
     def init_login_screen(self):
         widget = QWidget()
-        layout = QVBoxLayout()
+        main_layout = QVBoxLayout()
+
+        # Centered container for login to prevent stretching
+        login_container = QFrame()
+        login_container.setObjectName("login_box")
+        login_container.setFixedSize(400, 350)
+        login_layout = QVBoxLayout()
+        login_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        login_layout.setContentsMargins(30, 30, 30, 30)
+        login_layout.setSpacing(15)
+
+        header = QLabel("Logowanie do systemu")
+        header.setObjectName("header")
+        header.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.user_input = QLineEdit()
-        self.user_input.setPlaceholderText("Nazwa użytkownika (np. pacjent1 lub lekarz1)")
+        self.user_input.setPlaceholderText("Nazwa użytkownika (np. pacjent1)")
         self.pass_input = QLineEdit()
         self.pass_input.setPlaceholderText("Hasło (np. 123)")
         self.pass_input.setEchoMode(QLineEdit.EchoMode.Password)
@@ -179,25 +265,45 @@ class AppWindow(QMainWindow):
         login_btn = QPushButton("Zaloguj")
         login_btn.clicked.connect(self.handle_login)
 
-        layout.addWidget(QLabel("<h1>Logowanie do systemu</h1>"))
-        layout.addWidget(self.user_input)
-        layout.addWidget(self.pass_input)
-        layout.addWidget(login_btn)
-        widget.setLayout(layout)
+        login_layout.addWidget(header)
+        login_layout.addWidget(self.user_input)
+        login_layout.addWidget(self.pass_input)
+        login_layout.addSpacing(10)
+        login_layout.addWidget(login_btn)
+
+        login_container.setLayout(login_layout)
+
+        main_layout.addWidget(login_container, alignment=Qt.AlignmentFlag.AlignCenter)
+        widget.setLayout(main_layout)
         self.stacked_widget.addWidget(widget)
 
     def init_patient_screen(self):
         self.patient_widget = QWidget()
         layout = QVBoxLayout()
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
 
-        self.info_label = QLabel("Panel Pacjenta - Oczekiwanie na test...")
+        # Header and Info
+        header_layout = QHBoxLayout()
+        title = QLabel("Panel Pacjenta")
+        title.setObjectName("header")
+        self.info_label = QLabel("Oczekiwanie na wybór testu...")
+        self.info_label.setStyleSheet("font-size: 16px; color: #7f8c8d;")
+        header_layout.addWidget(title)
+        header_layout.addStretch()
+        header_layout.addWidget(self.info_label)
 
+        # Video Area (Scalable)
         self.video_label = QLabel("Kamera wyłączona")
+        self.video_label.setObjectName("video_feed")
         self.video_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.video_label.setStyleSheet("background-color: black; color: white;")
-        self.video_label.setMinimumSize(640, 480)
+        self.video_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.video_label.setMinimumSize(320, 240)
 
-        # Dropdown for selecting the neurological test
+        # Bottom Control Panel
+        control_layout = QHBoxLayout()
+        control_layout.setSpacing(10)
+
         self.test_selector = QComboBox()
         self.test_selector.addItems([
             "Uniesienie prawej ręki",
@@ -205,41 +311,64 @@ class AppWindow(QMainWindow):
             "Uniesienie obu rąk",
             "Złączenie dłoni przed sobą (Palec-do-palca)"
         ])
+        self.test_selector.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
-        self.start_test_btn = QPushButton("Rozpocznij Test Neurologiczny")
+        self.start_test_btn = QPushButton("Rozpocznij Test")
         self.start_test_btn.clicked.connect(self.start_patient_test)
 
         logout_btn = QPushButton("Wyloguj")
+        logout_btn.setObjectName("danger")
         logout_btn.clicked.connect(self.logout)
 
-        layout.addWidget(self.info_label)
-        layout.addWidget(self.video_label)
-        layout.addWidget(QLabel("Wybierz rodzaj testu do przeprowadzenia:"))
-        layout.addWidget(self.test_selector)
-        layout.addWidget(self.start_test_btn)
-        layout.addWidget(logout_btn)
+        control_layout.addWidget(QLabel("Wybierz test:"))
+        control_layout.addWidget(self.test_selector)
+        control_layout.addWidget(self.start_test_btn)
+        control_layout.addStretch()
+        control_layout.addWidget(logout_btn)
+
+        # Add everything to main layout
+        layout.addLayout(header_layout)
+        layout.addWidget(self.video_label, stretch=1)
+        layout.addLayout(control_layout)
+
         self.patient_widget.setLayout(layout)
         self.stacked_widget.addWidget(self.patient_widget)
 
     def init_doctor_screen(self):
         self.doctor_widget = QWidget()
         layout = QVBoxLayout()
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
 
-        layout.addWidget(QLabel("<h1>Panel Lekarza</h1>"))
-        layout.addWidget(QLabel("Ostatnie wyniki testów do przeanalizowania (Z bazy danych):"))
+        title = QLabel("Panel Lekarza")
+        title.setObjectName("header")
 
-        self.results_label = QLabel("Brak nowych testów.")
-        self.results_label.setAlignment(Qt.AlignmentFlag.AlignTop)
+        # Responsive Data Table
+        self.results_table = QTableWidget()
+        self.results_table.setColumnCount(4)
+        self.results_table.setHorizontalHeaderLabels(["ID", "Pacjent", "Wynik AI", "Status"])
+        self.results_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.results_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.results_table.setAlternatingRowColors(True)
 
+        # Buttons
+        btn_layout = QHBoxLayout()
         refresh_btn = QPushButton("Odśwież wyniki")
         refresh_btn.clicked.connect(self.load_doctor_results)
 
         logout_btn = QPushButton("Wyloguj")
+        logout_btn.setObjectName("danger")
         logout_btn.clicked.connect(self.logout)
 
-        layout.addWidget(self.results_label)
-        layout.addWidget(refresh_btn)
-        layout.addWidget(logout_btn)
+        btn_layout.addStretch()
+        btn_layout.addWidget(refresh_btn)
+        btn_layout.addWidget(logout_btn)
+
+        layout.addWidget(title)
+        layout.addWidget(QLabel("Ostatnie wyniki testów do przeanalizowania:"))
+        layout.addWidget(self.results_table)
+        layout.addLayout(btn_layout)
+
         self.doctor_widget.setLayout(layout)
         self.stacked_widget.addWidget(self.doctor_widget)
 
@@ -281,8 +410,8 @@ class AppWindow(QMainWindow):
             test_type = 'hands_together'
             instruction = "Proszę wyciągnąć ręce i złączyć dłonie przed sobą."
 
-        self.info_label.setText(f"Test w toku... {instruction}")
-        self.info_label.setStyleSheet("color: black; font-weight: normal;")
+        self.info_label.setText(f"Test w toku: {instruction}")
+        self.info_label.setStyleSheet("color: #e67e22; font-weight: bold;")
 
         self.tts.say(f"Rozpoczynamy badanie. {instruction}")
 
@@ -293,10 +422,9 @@ class AppWindow(QMainWindow):
 
     def handle_test_success(self, message):
         self.info_label.setText(message)
-        self.info_label.setStyleSheet("color: green; font-weight: bold;")
+        self.info_label.setStyleSheet("color: #27ae60; font-weight: bold;")
         self.tts.say("Zadanie wykonane poprawnie. Dziękuję.")
 
-        # Save the completed test to the database
         test_name = self.test_selector.currentText()
         with sqlite3.connect(DB_NAME) as conn:
             cursor = conn.cursor()
@@ -304,8 +432,13 @@ class AppWindow(QMainWindow):
                            (self.current_user, f"Zaliczony: {test_name}", "Do weryfikacji"))
 
     def update_image(self, q_img):
-        self.video_label.setPixmap(QPixmap.fromImage(q_img).scaled(
-            self.video_label.width(), self.video_label.height(), Qt.AspectRatioMode.KeepAspectRatio))
+        # Smooth scaling that dynamically matches the QLabel's current size
+        scaled_pixmap = QPixmap.fromImage(q_img).scaled(
+            self.video_label.size(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation
+        )
+        self.video_label.setPixmap(scaled_pixmap)
 
     def load_doctor_results(self):
         with sqlite3.connect(DB_NAME) as conn:
@@ -313,11 +446,13 @@ class AppWindow(QMainWindow):
             cursor.execute("SELECT id, patient_username, result_data, doctor_decision FROM tests")
             rows = cursor.fetchall()
 
-        if rows:
-            txt = "\n\n".join([f"ID: {r[0]} | Pacjent: {r[1]}\nWynik AI: {r[2]} | Status: {r[3]}" for r in rows])
-            self.results_label.setText(txt)
-        else:
-            self.results_label.setText("Brak danych w bazie.")
+        self.results_table.setRowCount(0)
+        for row_idx, row_data in enumerate(rows):
+            self.results_table.insertRow(row_idx)
+            for col_idx, data in enumerate(row_data):
+                item = QTableWidgetItem(str(data))
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.results_table.setItem(row_idx, col_idx, item)
 
     def logout(self):
         if hasattr(self, 'camera_thread') and self.camera_thread.isRunning():
@@ -326,8 +461,8 @@ class AppWindow(QMainWindow):
         if hasattr(self, 'start_test_btn'):
             self.start_test_btn.setEnabled(True)
             self.test_selector.setEnabled(True)
-            self.info_label.setText("Panel Pacjenta - Oczekiwanie na test...")
-            self.info_label.setStyleSheet("color: black; font-weight: normal;")
+            self.info_label.setText("Oczekiwanie na wybór testu...")
+            self.info_label.setStyleSheet("font-size: 16px; color: #7f8c8d;")
             self.video_label.clear()
             self.video_label.setText("Kamera wyłączona")
 
