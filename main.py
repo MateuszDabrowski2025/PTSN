@@ -8,91 +8,125 @@ import math
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLabel, QLineEdit,
                              QStackedWidget, QMessageBox, QComboBox, QTableWidget,
-                             QTableWidgetItem, QHeaderView, QFrame, QSizePolicy)
+                             QTableWidgetItem, QHeaderView, QFrame, QSizePolicy, QGraphicsDropShadowEffect)
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
-from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtGui import QImage, QPixmap, QColor, QFontDatabase
 from PyQt6.QtTextToSpeech import QTextToSpeech
 from PyQt6.QtCore import QLocale
 
 DB_NAME = 'telemedycyna.db'
 
 # ==========================================
+# MODERN UI STYLESHEET (QSS)
+# ==========================================
 STYLE_SHEET = """
+* {
+    font-family: 'Segoe UI', 'Helvetica Neue', sans-serif;
+}
 QMainWindow {
-    background-color: #f0f4f8;
+    background-color: #F4F7F6;
 }
 QLabel {
-    font-size: 14px;
-    color: #333333;
+    font-size: 15px;
+    color: #2C3E50;
+}
+QLabel#app_title {
+    font-size: 20px;
+    font-weight: 800;
+    color: #1A365D;
 }
 QLabel#header {
-    font-size: 26px;
-    font-weight: bold;
-    color: #2c3e50;
-    margin-bottom: 20px;
+    font-size: 24px;
+    font-weight: 700;
+    color: #1A365D;
+    margin-bottom: 10px;
 }
 QLabel#video_feed {
-    background-color: #1e1e1e;
-    color: #ffffff;
-    border-radius: 10px;
+    background-color: #000000;
+    color: #FFFFFF;
+    border-radius: 12px;
 }
+
+/* --- UPDATED QLINEEDIT FOR HIGH CONTRAST --- */
 QLineEdit {
-    padding: 12px;
-    font-size: 14px;
-    border: 1px solid #ced4da;
-    border-radius: 6px;
-    background-color: #ffffff;
+    padding: 14px;
+    font-size: 15px;
+    color: #000000;              /* Pure black text for maximum contrast */
+    font-weight: 600;            /* Slightly bolder text to make it pop */
+    border: 1px solid #9CA3AF;   /* Slightly darker border for better definition */
+    border-radius: 8px;
+    background-color: #FFFFFF;   /* Pure white background */
 }
 QLineEdit:focus {
-    border: 2px solid #3498db;
+    border: 2px solid #2563EB;
+    background-color: #F8FAFC;   /* Very subtle blue tint on focus */
+    color: #000000;
 }
+QLineEdit::placeholder {
+    color: #6B7280;              /* Distinct gray for placeholders so it isn't confused with input */
+    font-weight: normal;         /* Keep placeholders normal weight */
+}
+/* ------------------------------------------- */
+
 QPushButton {
-    background-color: #3498db;
+    background-color: #2563EB;
     color: white;
-    padding: 12px 20px;
-    font-size: 14px;
+    padding: 14px 20px;
+    font-size: 15px;
     border: none;
-    border-radius: 6px;
-    font-weight: bold;
+    border-radius: 8px;
+    font-weight: 600;
 }
 QPushButton:hover {
-    background-color: #2980b9;
+    background-color: #1D4ED8;
 }
 QPushButton:disabled {
-    background-color: #95a5a6;
-    color: #ecf0f1;
+    background-color: #9CA3AF;
+    color: #F3F4F6;
 }
 QPushButton#danger {
-    background-color: #e74c3c;
+    background-color: #EF4444;
+    padding: 10px 15px;
 }
 QPushButton#danger:hover {
-    background-color: #c0392b;
+    background-color: #DC2626;
 }
 QComboBox {
-    padding: 10px;
-    font-size: 14px;
-    border: 1px solid #ced4da;
-    border-radius: 6px;
-    background-color: #ffffff;
+    padding: 12px;
+    font-size: 15px;
+    color: #000000;              /* Added high contrast to the dropdown text as well */
+    font-weight: 500;
+    border: 1px solid #D1D5DB;
+    border-radius: 8px;
+    background-color: #FFFFFF;
 }
 QTableWidget {
-    background-color: #ffffff;
-    alternate-background-color: #f9f9f9;
-    border: 1px solid #ced4da;
-    border-radius: 6px;
+    background-color: #FFFFFF;
+    alternate-background-color: #F8FAFC;
+    border: 1px solid #E2E8F0;
+    border-radius: 8px;
     font-size: 14px;
+    color: #000000;              /* High contrast for table text */
+    gridline-color: #E2E8F0;
 }
 QHeaderView::section {
-    background-color: #ecf0f1;
-    padding: 8px;
+    background-color: #F1F5F9;
+    padding: 10px;
     font-weight: bold;
+    color: #1E293B;              /* Darker header text */
     border: none;
-    border-bottom: 2px solid #bdc3c7;
+    border-bottom: 2px solid #CBD5E1;
 }
-QFrame#login_box {
-    background-color: #ffffff;
-    border-radius: 10px;
-    border: 1px solid #e1e8ed;
+QFrame#card {
+    background-color: #FFFFFF;
+    border-radius: 16px;
+}
+QFrame#navbar {
+    background-color: #FFFFFF;
+    border-bottom: 1px solid #E2E8F0;
+}
+QMessageBox {
+    background-color: #FFFFFF;
 }
 """
 
@@ -225,7 +259,7 @@ class AppWindow(QMainWindow):
         self.tts = QTextToSpeech()
         self.tts.setLocale(QLocale(QLocale.Language.Polish))
         self.setWindowTitle("System Diagnostyki Neurologicznej")
-        self.setMinimumSize(900, 700)
+        self.setMinimumSize(1000, 750)
         self.setStyleSheet(STYLE_SHEET)
 
         self.current_user = None
@@ -239,40 +273,75 @@ class AppWindow(QMainWindow):
 
         self.stacked_widget.setCurrentIndex(0)
 
+    def create_shadow(self):
+        """Pomocnicza funkcja do tworzenia cieni pod kartami"""
+        shadow = QGraphicsDropShadowEffect()
+        shadow.setBlurRadius(25)
+        shadow.setColor(QColor(0, 0, 0, 20))
+        shadow.setOffset(0, 8)
+        return shadow
+
+    def create_navbar(self):
+        """Tworzy zunifikowany pasek nawigacyjny na górze"""
+        navbar = QFrame()
+        navbar.setObjectName("navbar")
+        nav_layout = QHBoxLayout()
+        nav_layout.setContentsMargins(30, 15, 30, 15)
+
+        app_logo_title = QLabel("Telemedycyna AI")
+        app_logo_title.setObjectName("app_title")
+
+        logout_btn = QPushButton("Wyloguj")
+        logout_btn.setObjectName("danger")
+        logout_btn.clicked.connect(self.logout)
+        logout_btn.setFixedWidth(120)
+
+        nav_layout.addWidget(app_logo_title)
+        nav_layout.addStretch()
+        nav_layout.addWidget(logout_btn)
+        navbar.setLayout(nav_layout)
+        return navbar
+
     def init_login_screen(self):
         widget = QWidget()
         main_layout = QVBoxLayout()
 
-        # Centered container for login to prevent stretching
+        # Centered card
         login_container = QFrame()
-        login_container.setObjectName("login_box")
-        login_container.setFixedSize(400, 350)
+        login_container.setObjectName("card")
+        login_container.setFixedSize(450, 400)
+        login_container.setGraphicsEffect(self.create_shadow())
+
         login_layout = QVBoxLayout()
         login_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        login_layout.setContentsMargins(30, 30, 30, 30)
-        login_layout.setSpacing(15)
+        login_layout.setContentsMargins(40, 40, 40, 40)
+        login_layout.setSpacing(20)
 
-        header = QLabel("Logowanie do systemu")
+        header = QLabel("Witaj ponownie")
         header.setObjectName("header")
         header.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
+        sub_header = QLabel("Zaloguj się, aby kontynuować.")
+        sub_header.setStyleSheet("color: #64748B; margin-bottom: 10px;")
+        sub_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
         self.user_input = QLineEdit()
-        self.user_input.setPlaceholderText("Nazwa użytkownika (np. pacjent1)")
+        self.user_input.setPlaceholderText("Nazwa użytkownika")
         self.pass_input = QLineEdit()
-        self.pass_input.setPlaceholderText("Hasło (np. 123)")
+        self.pass_input.setPlaceholderText("Hasło")
         self.pass_input.setEchoMode(QLineEdit.EchoMode.Password)
 
-        login_btn = QPushButton("Zaloguj")
+        login_btn = QPushButton("Zaloguj się")
         login_btn.clicked.connect(self.handle_login)
 
         login_layout.addWidget(header)
+        login_layout.addWidget(sub_header)
         login_layout.addWidget(self.user_input)
         login_layout.addWidget(self.pass_input)
         login_layout.addSpacing(10)
         login_layout.addWidget(login_btn)
 
         login_container.setLayout(login_layout)
-
         main_layout.addWidget(login_container, alignment=Qt.AlignmentFlag.AlignCenter)
         widget.setLayout(main_layout)
         self.stacked_widget.addWidget(widget)
@@ -280,15 +349,29 @@ class AppWindow(QMainWindow):
     def init_patient_screen(self):
         self.patient_widget = QWidget()
         layout = QVBoxLayout()
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(15)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
-        # Header and Info
+        # Top Navbar
+        layout.addWidget(self.create_navbar())
+
+        # Main Content Area
+        content_layout = QVBoxLayout()
+        content_layout.setContentsMargins(40, 30, 40, 40)
+
+        card = QFrame()
+        card.setObjectName("card")
+        card.setGraphicsEffect(self.create_shadow())
+        card_layout = QVBoxLayout()
+        card_layout.setContentsMargins(30, 30, 30, 30)
+        card_layout.setSpacing(20)
+
+        # Header inside Card
         header_layout = QHBoxLayout()
         title = QLabel("Panel Pacjenta")
         title.setObjectName("header")
         self.info_label = QLabel("Oczekiwanie na wybór testu...")
-        self.info_label.setStyleSheet("font-size: 16px; color: #7f8c8d;")
+        self.info_label.setStyleSheet("font-size: 16px; color: #64748B; font-weight: bold;")
         header_layout.addWidget(title)
         header_layout.addStretch()
         header_layout.addWidget(self.info_label)
@@ -298,11 +381,11 @@ class AppWindow(QMainWindow):
         self.video_label.setObjectName("video_feed")
         self.video_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.video_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.video_label.setMinimumSize(320, 240)
+        self.video_label.setMinimumSize(640, 360)
 
-        # Bottom Control Panel
+        # Controls Area
         control_layout = QHBoxLayout()
-        control_layout.setSpacing(10)
+        control_layout.setSpacing(15)
 
         self.test_selector = QComboBox()
         self.test_selector.addItems([
@@ -316,20 +399,17 @@ class AppWindow(QMainWindow):
         self.start_test_btn = QPushButton("Rozpocznij Test")
         self.start_test_btn.clicked.connect(self.start_patient_test)
 
-        logout_btn = QPushButton("Wyloguj")
-        logout_btn.setObjectName("danger")
-        logout_btn.clicked.connect(self.logout)
-
         control_layout.addWidget(QLabel("Wybierz test:"))
         control_layout.addWidget(self.test_selector)
         control_layout.addWidget(self.start_test_btn)
-        control_layout.addStretch()
-        control_layout.addWidget(logout_btn)
 
-        # Add everything to main layout
-        layout.addLayout(header_layout)
-        layout.addWidget(self.video_label, stretch=1)
-        layout.addLayout(control_layout)
+        card_layout.addLayout(header_layout)
+        card_layout.addWidget(self.video_label, stretch=1)
+        card_layout.addLayout(control_layout)
+
+        card.setLayout(card_layout)
+        content_layout.addWidget(card)
+        layout.addLayout(content_layout)
 
         self.patient_widget.setLayout(layout)
         self.stacked_widget.addWidget(self.patient_widget)
@@ -337,10 +417,24 @@ class AppWindow(QMainWindow):
     def init_doctor_screen(self):
         self.doctor_widget = QWidget()
         layout = QVBoxLayout()
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(15)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
-        title = QLabel("Panel Lekarza")
+        # Top Navbar
+        layout.addWidget(self.create_navbar())
+
+        # Main Content Area
+        content_layout = QVBoxLayout()
+        content_layout.setContentsMargins(40, 30, 40, 40)
+
+        card = QFrame()
+        card.setObjectName("card")
+        card.setGraphicsEffect(self.create_shadow())
+        card_layout = QVBoxLayout()
+        card_layout.setContentsMargins(30, 30, 30, 30)
+        card_layout.setSpacing(20)
+
+        title = QLabel("Baza Wyników")
         title.setObjectName("header")
 
         # Responsive Data Table
@@ -350,24 +444,20 @@ class AppWindow(QMainWindow):
         self.results_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.results_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.results_table.setAlternatingRowColors(True)
+        self.results_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
 
-        # Buttons
-        btn_layout = QHBoxLayout()
         refresh_btn = QPushButton("Odśwież wyniki")
+        refresh_btn.setFixedWidth(200)
         refresh_btn.clicked.connect(self.load_doctor_results)
 
-        logout_btn = QPushButton("Wyloguj")
-        logout_btn.setObjectName("danger")
-        logout_btn.clicked.connect(self.logout)
+        card_layout.addWidget(title)
+        card_layout.addWidget(QLabel("Ostatnie wyniki testów wykonane przez pacjentów:"))
+        card_layout.addWidget(self.results_table)
+        card_layout.addWidget(refresh_btn, alignment=Qt.AlignmentFlag.AlignRight)
 
-        btn_layout.addStretch()
-        btn_layout.addWidget(refresh_btn)
-        btn_layout.addWidget(logout_btn)
-
-        layout.addWidget(title)
-        layout.addWidget(QLabel("Ostatnie wyniki testów do przeanalizowania:"))
-        layout.addWidget(self.results_table)
-        layout.addLayout(btn_layout)
+        card.setLayout(card_layout)
+        content_layout.addWidget(card)
+        layout.addLayout(content_layout)
 
         self.doctor_widget.setLayout(layout)
         self.stacked_widget.addWidget(self.doctor_widget)
@@ -392,7 +482,35 @@ class AppWindow(QMainWindow):
         else:
             QMessageBox.warning(self, "Błąd", "Nieprawidłowe dane logowania!")
 
+    def request_video_consent(self):
+        """Pokazuje profesjonalne okienko z prośbą o zgodę przed uruchomieniem wideo"""
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Wymagana Zgoda")
+        msg.setText("<b>Ochrona Danych Osobowych</b>")
+        msg.setInformativeText(
+            "Czy zgadzasz się na to, aby Twoje dane wideo były przetwarzane i wykorzystywane przez personel medyczny w celach diagnostycznych?\n\n(I agree for my video data to be used by medics)")
+        msg.setIcon(QMessageBox.Icon.Information)
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg.setDefaultButton(QMessageBox.StandardButton.No)
+
+        button_yes = msg.button(QMessageBox.StandardButton.Yes)
+        button_yes.setText("Wyrażam zgodę")
+
+        button_no = msg.button(QMessageBox.StandardButton.No)
+        button_no.setText("Odmów")
+
+        return msg.exec() == QMessageBox.StandardButton.Yes
+
     def start_patient_test(self):
+        # 1. Ask for Video Consent
+        has_consent = self.request_video_consent()
+
+        if not has_consent:
+            self.info_label.setText("Test anulowany: Brak zgody na wideo.")
+            self.info_label.setStyleSheet("color: #EF4444; font-weight: bold;")
+            return
+
+        # 2. Proceed if consent given
         self.start_test_btn.setEnabled(False)
         self.test_selector.setEnabled(False)
 
@@ -411,7 +529,7 @@ class AppWindow(QMainWindow):
             instruction = "Proszę wyciągnąć ręce i złączyć dłonie przed sobą."
 
         self.info_label.setText(f"Test w toku: {instruction}")
-        self.info_label.setStyleSheet("color: #e67e22; font-weight: bold;")
+        self.info_label.setStyleSheet("color: #F59E0B; font-weight: bold;")
 
         self.tts.say(f"Rozpoczynamy badanie. {instruction}")
 
@@ -422,7 +540,7 @@ class AppWindow(QMainWindow):
 
     def handle_test_success(self, message):
         self.info_label.setText(message)
-        self.info_label.setStyleSheet("color: #27ae60; font-weight: bold;")
+        self.info_label.setStyleSheet("color: #10B981; font-weight: bold;")
         self.tts.say("Zadanie wykonane poprawnie. Dziękuję.")
 
         test_name = self.test_selector.currentText()
@@ -432,7 +550,7 @@ class AppWindow(QMainWindow):
                            (self.current_user, f"Zaliczony: {test_name}", "Do weryfikacji"))
 
     def update_image(self, q_img):
-        # Smooth scaling that dynamically matches the QLabel's current size
+        # Odtwarzanie wideo z zaokrąglonymi rogami realizowane po stronie QSS (#video_feed)
         scaled_pixmap = QPixmap.fromImage(q_img).scaled(
             self.video_label.size(),
             Qt.AspectRatioMode.KeepAspectRatio,
@@ -462,7 +580,7 @@ class AppWindow(QMainWindow):
             self.start_test_btn.setEnabled(True)
             self.test_selector.setEnabled(True)
             self.info_label.setText("Oczekiwanie na wybór testu...")
-            self.info_label.setStyleSheet("font-size: 16px; color: #7f8c8d;")
+            self.info_label.setStyleSheet("font-size: 16px; color: #64748B; font-weight: bold;")
             self.video_label.clear()
             self.video_label.setText("Kamera wyłączona")
 
